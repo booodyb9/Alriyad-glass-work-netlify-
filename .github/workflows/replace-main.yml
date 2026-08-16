@@ -18,103 +18,57 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Recover staged production archive and replace main
+      - name: Restore verified staged production payload
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/riyadh-final
-          mkdir -p /tmp/riyadh-final/extracted
-          FOUND=""
+          mkdir -p /tmp/riyadh-final/extracted /tmp/riyadh-final/stage
 
-          try_x_archive() {
-            local extra="$1"
-            local out=/tmp/riyadh-final/candidate.xz
-            cat .upload/x00 .upload/x01 .upload/x02 .upload/x03 .upload/x04 .upload/x05 .upload/x06 .upload/x07 .upload/x08 "$extra" .upload/x10 > /tmp/riyadh-final/candidate.b64
-            if base64 -d /tmp/riyadh-final/candidate.b64 > "$out" 2>/dev/null && xz -t "$out" 2>/dev/null; then
-              FOUND="$out"
-              echo "Recovered x-series archive using $extra"
-              return 0
-            fi
-            return 1
-          }
+          # Pull the complete staged payload from the preserved production branch.
+          git checkout origin/production-clean-2026 -- .import-xz
+          cat .import-xz/payload.part-* > /tmp/riyadh-final/archive.b64
+          base64 -d /tmp/riyadh-final/archive.b64 > /tmp/riyadh-final/archive.xz
+          xz -t /tmp/riyadh-final/archive.xz
+          xz -dc /tmp/riyadh-final/archive.xz > /tmp/riyadh-final/payload
 
-          try_cpair_archive() {
-            local extra="$1"
-            local out=/tmp/riyadh-final/candidate.xz
-            cat .upload/cpair00 .upload/cpair01 .upload/cpair02 "$extra" .upload/cpair04 .upload/cpair05 .upload/cpair06 .upload/cpair07 > /tmp/riyadh-final/candidate.b64
-            if base64 -d /tmp/riyadh-final/candidate.b64 > "$out" 2>/dev/null && xz -t "$out" 2>/dev/null; then
-              FOUND="$out"
-              echo "Recovered cpair archive using $extra"
-              return 0
-            fi
-            return 1
-          }
-
-          # Search staged chunks for the single missing x09/cpair03 segment.
-          for f in .upload/*; do
-            case "$f" in
-              .upload/x00|.upload/x01|.upload/x02|.upload/x03|.upload/x04|.upload/x05|.upload/x06|.upload/x07|.upload/x08|.upload/x10) continue ;;
-            esac
-            try_x_archive "$f" && break || true
-          done
-
-          if test -z "$FOUND"; then
-            for f in .upload/*; do
-              case "$f" in
-                .upload/cpair00|.upload/cpair01|.upload/cpair02|.upload/cpair04|.upload/cpair05|.upload/cpair06|.upload/cpair07) continue ;;
-              esac
-              try_cpair_archive "$f" && break || true
-            done
-          fi
-
-          # Also test known complete-looking groups directly.
-          if test -z "$FOUND"; then
-            for pattern in ".upload/prod2026_00 .upload/prod2026_rest" ".upload/final00 .upload/final01" ".upload/q000 .upload/q001 .upload/q002" ".upload/r000 .upload/r001 .upload/r002 .upload/r003 .upload/r004 .upload/r005 .upload/r006 .upload/r007 .upload/r008 .upload/r009 .upload/r010 .upload/r011 .upload/r012 .upload/r013"; do
-              cat $pattern > /tmp/riyadh-final/candidate.b64
-              if base64 -d /tmp/riyadh-final/candidate.b64 > /tmp/riyadh-final/candidate.xz 2>/dev/null && xz -t /tmp/riyadh-final/candidate.xz 2>/dev/null; then
-                FOUND=/tmp/riyadh-final/candidate.xz
-                echo "Recovered direct archive group: $pattern"
-                break
-              fi
-            done
-          fi
-
-          test -n "$FOUND"
-          xz -dc "$FOUND" > /tmp/riyadh-final/payload
-
-          # The XZ payload may be a ZIP or a TAR archive.
           if unzip -tq /tmp/riyadh-final/payload >/dev/null 2>&1; then
             unzip -q /tmp/riyadh-final/payload -d /tmp/riyadh-final/extracted
           elif tar -tf /tmp/riyadh-final/payload >/dev/null 2>&1; then
             tar -xf /tmp/riyadh-final/payload -C /tmp/riyadh-final/extracted
           else
-            echo "Recovered XZ payload is not a supported project archive"
+            echo 'Unsupported recovered payload format'
             file /tmp/riyadh-final/payload || true
             exit 1
           fi
 
           if test -f /tmp/riyadh-final/extracted/package.json; then
             PROJECT_ROOT=/tmp/riyadh-final/extracted
-          elif test -f /tmp/riyadh-final/extracted/rg_final/package.json; then
-            PROJECT_ROOT=/tmp/riyadh-final/extracted/rg_final
           else
-            PROJECT_ROOT="$(find /tmp/riyadh-final/extracted -mindepth 1 -maxdepth 3 -type f -name package.json -printf '%h\n' | head -n 1)"
+            PROJECT_ROOT="$(find /tmp/riyadh-final/extracted -mindepth 1 -maxdepth 4 -type f -name package.json -printf '%h\n' | head -n 1)"
           fi
 
           test -n "${PROJECT_ROOT:-}"
           test -f "$PROJECT_ROOT/package.json"
           test -f "$PROJECT_ROOT/index.html"
 
+          # These files identify the reviewed/fixed production project, not the old flat source tree.
+          test -f "$PROJECT_ROOT/src/App.tsx"
+          test -f "$PROJECT_ROOT/netlify/functions/ai.mjs"
+          test -f "$PROJECT_ROOT/server/ai-core.js"
+          test -f "$PROJECT_ROOT/supabase/migrations/20260812_ai_crm_upgrade.sql"
+
+          # Replace main with only the production project.
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a "$PROJECT_ROOT"/. .
-          rm -rf .upload
+          rm -rf .upload .import .import-xz
           rm -f riyadh-glass-production-final.zip
           rm -f .github/workflows/replace-main.yml
           find . -type d -empty -delete || true
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git diff --cached --quiet && { echo "No changes to commit"; exit 0; }
-          git commit -m "Replace main with final clean Riyadh Glass project"
+          git diff --cached --quiet && { echo 'No changes to commit'; exit 0; }
+          git commit -m 'Replace main with final clean Riyadh Glass project'
           git push origin HEAD:main
