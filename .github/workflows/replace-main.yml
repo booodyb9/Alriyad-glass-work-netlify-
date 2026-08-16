@@ -23,15 +23,14 @@ jobs:
           test -f riyadh-glass-production-final.zip
           rm -rf /tmp/riyadh-final
           mkdir -p /tmp/riyadh-final
-          unzip -q riyadh-glass-production-final.zip -d /tmp/riyadh-final
-          test -f /tmp/riyadh-final/rg_final/package.json
+          base64 -d riyadh-glass-production-final.zip > /tmp/riyadh-final/final.zip
+          unzip -q /tmp/riyadh-final/final.zip -d /tmp/riyadh-final/extracted
+          test -f /tmp/riyadh-final/extracted/rg_final/package.json
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -a /tmp/riyadh-final/rg_final/. .
+          cp -a /tmp/riyadh-final/extracted/rg_final/. .
           rm -rf .github
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Replace main with final clean Riyadh Glass project"
           git push origin HEAD:main
-
-# one-time production cleanup trigger
