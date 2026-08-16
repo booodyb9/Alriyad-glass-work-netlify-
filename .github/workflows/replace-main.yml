@@ -1,0 +1,35 @@
+name: Replace main with final production project
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/replace-main.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  replace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Replace repository contents with final project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f riyadh-glass-production-final.zip
+          rm -rf /tmp/riyadh-final
+          mkdir -p /tmp/riyadh-final
+          unzip -q riyadh-glass-production-final.zip -d /tmp/riyadh-final
+          test -f /tmp/riyadh-final/rg_final/package.json
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a /tmp/riyadh-final/rg_final/. .
+          rm -rf .github
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Replace main with final clean Riyadh Glass project"
+          git push origin HEAD:main
