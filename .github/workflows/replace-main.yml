@@ -33,3 +33,5 @@ jobs:
           git add -A
           git commit -m "Replace main with final clean Riyadh Glass project"
           git push origin HEAD:main
+
+# one-time production cleanup trigger
