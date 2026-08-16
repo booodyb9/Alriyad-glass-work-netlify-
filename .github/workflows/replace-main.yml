@@ -16,19 +16,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Replace repository contents with final project
+      - name: Replace repository with clean production project
         shell: bash
         run: |
           set -euo pipefail
-          test -f riyadh-glass-production-final.zip
           rm -rf /tmp/riyadh-final
-          mkdir -p /tmp/riyadh-final
-          base64 -d riyadh-glass-production-final.zip > /tmp/riyadh-final/final.zip
-          unzip -q /tmp/riyadh-final/final.zip -d /tmp/riyadh-final/extracted
+          mkdir -p /tmp/riyadh-final/extracted
+          cat .upload/prod2026_00 .upload/prod2026_rest > /tmp/riyadh-final/archive.b64
+          test "$(wc -c < /tmp/riyadh-final/archive.b64)" -eq 186232
+          base64 -d /tmp/riyadh-final/archive.b64 > /tmp/riyadh-final/final.tar.xz
+          xz -t /tmp/riyadh-final/final.tar.xz
+          tar -xJf /tmp/riyadh-final/final.tar.xz -C /tmp/riyadh-final/extracted
           test -f /tmp/riyadh-final/extracted/rg_final/package.json
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a /tmp/riyadh-final/extracted/rg_final/. .
-          rm -rf .github
+          rm -f .github/workflows/replace-main.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
