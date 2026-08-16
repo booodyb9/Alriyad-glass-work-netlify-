@@ -13,26 +13,50 @@ jobs:
   replace:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout full history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Replace repository with clean production project
         shell: bash
         run: |
           set -euo pipefail
+          ARCHIVE_COMMIT="12fbd9a4f641280100b4e475d7a931fa883eaca9"
           rm -rf /tmp/riyadh-final
           mkdir -p /tmp/riyadh-final/extracted
-          cat .upload/prod2026_00 .upload/prod2026_rest > /tmp/riyadh-final/archive.b64
-          test "$(wc -c < /tmp/riyadh-final/archive.b64)" -eq 186232
-          base64 -d /tmp/riyadh-final/archive.b64 > /tmp/riyadh-final/final.tar.xz
-          xz -t /tmp/riyadh-final/final.tar.xz
-          tar -xJf /tmp/riyadh-final/final.tar.xz -C /tmp/riyadh-final/extracted
-          test -f /tmp/riyadh-final/extracted/rg_final/package.json
+
+          # Restore the exact binary production ZIP that was committed earlier.
+          git show "${ARCHIVE_COMMIT}:riyadh-glass-production-final.zip" > /tmp/riyadh-final/final.zip
+          unzip -tq /tmp/riyadh-final/final.zip
+          unzip -q /tmp/riyadh-final/final.zip -d /tmp/riyadh-final/extracted
+
+          # Detect whether the ZIP contains the project at root or inside one top-level folder.
+          if test -f /tmp/riyadh-final/extracted/package.json; then
+            PROJECT_ROOT=/tmp/riyadh-final/extracted
+          elif test -f /tmp/riyadh-final/extracted/rg_final/package.json; then
+            PROJECT_ROOT=/tmp/riyadh-final/extracted/rg_final
+          else
+            PROJECT_ROOT="$(find /tmp/riyadh-final/extracted -mindepth 1 -maxdepth 2 -type f -name package.json -printf '%h\n' | head -n 1)"
+          fi
+
+          test -n "${PROJECT_ROOT:-}"
+          test -f "$PROJECT_ROOT/package.json"
+          test -f "$PROJECT_ROOT/index.html"
+
+          # Replace main completely while preserving only Git metadata.
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -a /tmp/riyadh-final/extracted/rg_final/. .
+          cp -a "$PROJECT_ROOT"/. .
+
+          # Never keep staging/upload artifacts or the one-time replacement workflow.
+          rm -rf .upload
+          rm -f riyadh-glass-production-final.zip
           rm -f .github/workflows/replace-main.yml
+          find . -type d -empty -delete || true
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git diff --cached --quiet && { echo "No changes to commit"; exit 0; }
           git commit -m "Replace main with final clean Riyadh Glass project"
           git push origin HEAD:main
