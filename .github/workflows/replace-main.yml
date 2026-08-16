@@ -18,37 +18,95 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Replace repository with clean production project
+      - name: Recover staged production archive and replace main
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE_COMMIT="12fbd9a4f641280100b4e475d7a931fa883eaca9"
           rm -rf /tmp/riyadh-final
           mkdir -p /tmp/riyadh-final/extracted
+          FOUND=""
 
-          # Restore the exact binary production ZIP that was committed earlier.
-          git show "${ARCHIVE_COMMIT}:riyadh-glass-production-final.zip" > /tmp/riyadh-final/final.zip
-          unzip -tq /tmp/riyadh-final/final.zip
-          unzip -q /tmp/riyadh-final/final.zip -d /tmp/riyadh-final/extracted
+          try_x_archive() {
+            local extra="$1"
+            local out=/tmp/riyadh-final/candidate.xz
+            cat .upload/x00 .upload/x01 .upload/x02 .upload/x03 .upload/x04 .upload/x05 .upload/x06 .upload/x07 .upload/x08 "$extra" .upload/x10 > /tmp/riyadh-final/candidate.b64
+            if base64 -d /tmp/riyadh-final/candidate.b64 > "$out" 2>/dev/null && xz -t "$out" 2>/dev/null; then
+              FOUND="$out"
+              echo "Recovered x-series archive using $extra"
+              return 0
+            fi
+            return 1
+          }
 
-          # Detect whether the ZIP contains the project at root or inside one top-level folder.
+          try_cpair_archive() {
+            local extra="$1"
+            local out=/tmp/riyadh-final/candidate.xz
+            cat .upload/cpair00 .upload/cpair01 .upload/cpair02 "$extra" .upload/cpair04 .upload/cpair05 .upload/cpair06 .upload/cpair07 > /tmp/riyadh-final/candidate.b64
+            if base64 -d /tmp/riyadh-final/candidate.b64 > "$out" 2>/dev/null && xz -t "$out" 2>/dev/null; then
+              FOUND="$out"
+              echo "Recovered cpair archive using $extra"
+              return 0
+            fi
+            return 1
+          }
+
+          # Search staged chunks for the single missing x09/cpair03 segment.
+          for f in .upload/*; do
+            case "$f" in
+              .upload/x00|.upload/x01|.upload/x02|.upload/x03|.upload/x04|.upload/x05|.upload/x06|.upload/x07|.upload/x08|.upload/x10) continue ;;
+            esac
+            try_x_archive "$f" && break || true
+          done
+
+          if test -z "$FOUND"; then
+            for f in .upload/*; do
+              case "$f" in
+                .upload/cpair00|.upload/cpair01|.upload/cpair02|.upload/cpair04|.upload/cpair05|.upload/cpair06|.upload/cpair07) continue ;;
+              esac
+              try_cpair_archive "$f" && break || true
+            done
+          fi
+
+          # Also test known complete-looking groups directly.
+          if test -z "$FOUND"; then
+            for pattern in ".upload/prod2026_00 .upload/prod2026_rest" ".upload/final00 .upload/final01" ".upload/q000 .upload/q001 .upload/q002" ".upload/r000 .upload/r001 .upload/r002 .upload/r003 .upload/r004 .upload/r005 .upload/r006 .upload/r007 .upload/r008 .upload/r009 .upload/r010 .upload/r011 .upload/r012 .upload/r013"; do
+              cat $pattern > /tmp/riyadh-final/candidate.b64
+              if base64 -d /tmp/riyadh-final/candidate.b64 > /tmp/riyadh-final/candidate.xz 2>/dev/null && xz -t /tmp/riyadh-final/candidate.xz 2>/dev/null; then
+                FOUND=/tmp/riyadh-final/candidate.xz
+                echo "Recovered direct archive group: $pattern"
+                break
+              fi
+            done
+          fi
+
+          test -n "$FOUND"
+          xz -dc "$FOUND" > /tmp/riyadh-final/payload
+
+          # The XZ payload may be a ZIP or a TAR archive.
+          if unzip -tq /tmp/riyadh-final/payload >/dev/null 2>&1; then
+            unzip -q /tmp/riyadh-final/payload -d /tmp/riyadh-final/extracted
+          elif tar -tf /tmp/riyadh-final/payload >/dev/null 2>&1; then
+            tar -xf /tmp/riyadh-final/payload -C /tmp/riyadh-final/extracted
+          else
+            echo "Recovered XZ payload is not a supported project archive"
+            file /tmp/riyadh-final/payload || true
+            exit 1
+          fi
+
           if test -f /tmp/riyadh-final/extracted/package.json; then
             PROJECT_ROOT=/tmp/riyadh-final/extracted
           elif test -f /tmp/riyadh-final/extracted/rg_final/package.json; then
             PROJECT_ROOT=/tmp/riyadh-final/extracted/rg_final
           else
-            PROJECT_ROOT="$(find /tmp/riyadh-final/extracted -mindepth 1 -maxdepth 2 -type f -name package.json -printf '%h\n' | head -n 1)"
+            PROJECT_ROOT="$(find /tmp/riyadh-final/extracted -mindepth 1 -maxdepth 3 -type f -name package.json -printf '%h\n' | head -n 1)"
           fi
 
           test -n "${PROJECT_ROOT:-}"
           test -f "$PROJECT_ROOT/package.json"
           test -f "$PROJECT_ROOT/index.html"
 
-          # Replace main completely while preserving only Git metadata.
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a "$PROJECT_ROOT"/. .
-
-          # Never keep staging/upload artifacts or the one-time replacement workflow.
           rm -rf .upload
           rm -f riyadh-glass-production-final.zip
           rm -f .github/workflows/replace-main.yml
